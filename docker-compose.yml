@@ -1,0 +1,13 @@
+services:
+  rag:
+    build: .
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-4.1-mini}
+      RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-text-embedding-3-small}
+      RAG_TEXT_FILE: ${RAG_TEXT_FILE:-红楼梦.txt}
+      RAG_CHROMA_DIR: ${RAG_CHROMA_DIR:-data/chroma_db}
+    volumes:
+      - .:/app
+    tty: true
+    stdin_open: true
