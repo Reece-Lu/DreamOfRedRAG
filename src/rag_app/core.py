@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+import re
 
 from chromadb import PersistentClient
 from openai import OpenAI
@@ -127,14 +128,36 @@ class RetrievedChunk:
     source: str
     text: str
     distance: float | None = None
+    semantic_score: float | None = None
+    keyword_score: float | None = None
+    final_score: float | None = None
 
 
-def retrieve(question: str, settings: Settings, top_k: int = 3) -> list[RetrievedChunk]:
+def _tokenize_for_keyword_match(text: str) -> list[str]:
+    # 轻量中文关键词切分：提取连续中文片段和英文数字词。
+    # 不是严格分词器，但对学习项目足够用于“关键词覆盖率”打分。
+    cjk_parts = re.findall(r"[\u4e00-\u9fff]{2,}", text)
+    latin_parts = re.findall(r"[A-Za-z0-9_]{2,}", text.lower())
+    return cjk_parts + latin_parts
+
+
+def _keyword_recall_score(question: str, document: str) -> float:
+    question_tokens = set(_tokenize_for_keyword_match(question))
+    if not question_tokens:
+        return 0.0
+
+    doc_text = document.lower()
+    hit = sum(1 for token in question_tokens if token.lower() in doc_text)
+    return hit / len(question_tokens)
+
+
+def retrieve(question: str, settings: Settings, top_k: int = 3, candidate_k: int | None = None) -> list[RetrievedChunk]:
     collection = get_collection(settings, recreate=False)
+    candidate_count = max(top_k, candidate_k or top_k * 4)
     query_embedding = embed_texts([question], settings)[0]
     result = collection.query(
         query_embeddings=[query_embedding],
-        n_results=top_k,
+        n_results=candidate_count,
         include=["documents", "metadatas", "distances"],
     )
     docs = result.get("documents", [[]])[0]
@@ -143,19 +166,28 @@ def retrieve(question: str, settings: Settings, top_k: int = 3) -> list[Retrieve
 
     items: list[RetrievedChunk] = []
     for doc, meta, distance in zip(docs, metas, distances):
+        distance_value = float(distance) if distance is not None else None
+        semantic_score = 0.0 if distance_value is None else 1.0 / (1.0 + distance_value)
+        keyword_score = _keyword_recall_score(question, str(doc))
+        final_score = 0.75 * semantic_score + 0.25 * keyword_score
         items.append(
             RetrievedChunk(
                 chunk=int(meta["chunk"]),
                 source=str(meta["source"]),
                 text=str(doc),
-                distance=float(distance) if distance is not None else None,
+                distance=distance_value,
+                semantic_score=semantic_score,
+                keyword_score=keyword_score,
+                final_score=final_score,
             )
-    )
-    return items
+        )
+
+    items.sort(key=lambda item: item.final_score or 0.0, reverse=True)
+    return items[:top_k]
 
 
 # 这一组函数负责把检索结果组织成提示词，并调用聊天模型生成答案。
-def format_context(chunks: list[RetrievedChunk], max_chars_per_chunk: int = 700) -> str:
+def format_context(chunks: list[RetrievedChunk], max_chars_per_chunk: int = 1000) -> str:
     parts: list[str] = []
     for i, chunk in enumerate(chunks, 1):
         snippet = chunk.text[:max_chars_per_chunk]
@@ -174,7 +206,12 @@ def answer_with_llm(question: str, chunks: list[RetrievedChunk], settings: Setti
         messages=[
             {
                 "role": "system",
-                "content": "你是一个中文问答助手。只能根据给定的检索片段回答；如果片段不足以回答，就直接说不知道。",
+                "content": (
+                    "你是一个中文问答助手。你必须优先依据检索片段回答。"
+                    "如果片段能直接支持答案，请给出简洁答案并标注依据片段编号。"
+                    "如果片段不能直接回答但可合理推断，请明确写“根据片段推测”。"
+                    "只有在片段完全没有相关信息时，才回答“不知道”。"
+                ),
             },
             {
                 "role": "user",

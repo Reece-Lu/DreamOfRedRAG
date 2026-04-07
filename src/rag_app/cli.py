@@ -13,10 +13,12 @@ def build_parser() -> argparse.ArgumentParser:
     ask_parser = subparsers.add_parser("ask", help="提问并生成答案")
     ask_parser.add_argument("question", nargs="?", default="")
     ask_parser.add_argument("--top-k", type=int, default=5)
+    ask_parser.add_argument("--candidate-k", type=int, default=20, help="先召回再重排的候选数量")
 
     search_parser = subparsers.add_parser("search", help="只检索，不调用大模型")
     search_parser.add_argument("question", nargs="?", default="")
     search_parser.add_argument("--top-k", type=int, default=5)
+    search_parser.add_argument("--candidate-k", type=int, default=20, help="先召回再重排的候选数量")
 
     return parser
 
@@ -32,11 +34,21 @@ def main() -> None:
         return
 
     question = getattr(args, "question", "").strip() or input("请输入问题：").strip()
-    chunks = retrieve(question, settings, top_k=getattr(args, "top_k", 3))
+    chunks = retrieve(
+        question,
+        settings,
+        top_k=getattr(args, "top_k", 3),
+        candidate_k=getattr(args, "candidate_k", None),
+    )
 
     print("\n检索到的相关片段：")
     for i, chunk in enumerate(chunks, 1):
         print(f"\n[{i}] chunk={chunk.chunk} source={chunk.source}")
+        print(
+            "score="
+            f"{(chunk.final_score or 0.0):.4f} "
+            f"(semantic={(chunk.semantic_score or 0.0):.4f}, keyword={(chunk.keyword_score or 0.0):.4f})"
+        )
         print(chunk.text[:400])
 
     if args.command == "search":

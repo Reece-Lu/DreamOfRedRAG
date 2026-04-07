@@ -62,6 +62,12 @@ python rag_minimal.py search "贾宝玉第一次见到林黛玉在哪里？"
 python rag_minimal.py ask "贾宝玉第一次见到林黛玉在哪里？"
 ```
 
+带“先召回再重排”的检索参数（推荐）：
+
+```bash
+python rag_minimal.py ask "刘姥姥一共去了几次大观园？" --top-k 5 --candidate-k 30
+```
+
 ## Docker 运行
 
 构建镜像：
@@ -88,6 +94,7 @@ docker compose run --rm rag python rag_minimal.py ask "贾宝玉第一次见到�
 
 - 重新执行 `ingest`
 - 把 `ask` 的 `--top-k` 调大一点
+- 把 `--candidate-k` 设为 `top-k` 的 3~6 倍，让系统先多召回再按“语义+关键词”重排
 - 把切块调细一点，或者继续按章节拆分语料
 
 如果你之前已经用本地 embedding 建过 `chroma_db`，请先删除旧库再重新 `ingest`，因为现在换成了 OpenAI embedding，旧向量不能直接共用。
